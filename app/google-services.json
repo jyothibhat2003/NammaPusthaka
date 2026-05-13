@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "675956018221",
+    "project_id": "nammapustaka-66ee0",
+    "storage_bucket": "nammapustaka-66ee0.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:675956018221:android:9bd9d758dbbd3460b2bca4",
+        "android_client_info": {
+          "package_name": "com.example.nammapustaka2003"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA89ZhndBEq4bHqjmeTTW4lSu0tncAW0cQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

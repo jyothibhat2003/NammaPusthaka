@@ -1,0 +1,210 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // users/{userId}
+    //   - userId: string, must equal document id and auth uid
+    //   - name: string, 1..80 chars
+    //   - email: string
+    //   - role: string, "student" or "admin"; users may only self-create as "student"
+    //   - borrowedBooks: list, max 50 ids
+    //
+    // books/{bookId}
+    //   - bookId: string, must equal document id
+    //   - title, author, description, category: strings with size limits
+    //   - totalCopies: int, 0..10000
+    //   - availableCopies: int, 0..totalCopies
+    //   - createdBy: string uid
+    //   - createdAt: number millis
+    //
+    // issueHistory/{historyId}
+    //   - historyId: string, must equal document id
+    //   - bookId, bookTitle, userId, userEmail, action: strings
+    //   - action: "issued" or "returned"
+    //   - createdAt: number millis
+    //
+    // ===============================================================
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc(userId) {
+      return /databases/$(database)/documents/users/$(userId);
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && exists(userDoc(request.auth.uid))
+        && get(userDoc(request.auth.uid)).data.role == "admin";
+    }
+
+    function validEmail(email) {
+      return email is string
+        && email.size() <= 254
+        && email.matches("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$");
+    }
+
+    function validUser(data, userId) {
+      return data.keys().hasOnly(["userId", "name", "email", "role", "borrowedBooks"])
+        && data.keys().hasAll(["userId", "name", "email", "role", "borrowedBooks"])
+        && data.userId == userId
+        && data.name is string
+        && data.name.size() > 0
+        && data.name.size() <= 80
+        && validEmail(data.email)
+        && data.role in ["student", "admin"]
+        && data.borrowedBooks is list
+        && data.borrowedBooks.size() <= 50;
+    }
+
+    function validBook(data, bookId) {
+      return data.keys().hasOnly([
+          "bookId",
+          "title",
+          "author",
+          "description",
+          "category",
+          "totalCopies",
+          "availableCopies",
+          "createdBy",
+          "createdAt"
+        ])
+        && data.keys().hasAll([
+          "bookId",
+          "title",
+          "author",
+          "description",
+          "category",
+          "totalCopies",
+          "availableCopies",
+          "createdBy",
+          "createdAt"
+        ])
+        && data.bookId == bookId
+        && data.title is string
+        && data.title.size() > 0
+        && data.title.size() <= 160
+        && data.author is string
+        && data.author.size() > 0
+        && data.author.size() <= 120
+        && data.description is string
+        && data.description.size() <= 1000
+        && data.category is string
+        && data.category.size() <= 80
+        && data.totalCopies is int
+        && data.totalCopies >= 0
+        && data.totalCopies <= 10000
+        && data.availableCopies is int
+        && data.availableCopies >= 0
+        && data.availableCopies <= data.totalCopies
+        && data.createdBy is string
+        && data.createdBy.size() > 0
+        && data.createdAt is number
+        && data.createdAt > 0;
+    }
+
+    function validIssueHistory(data, historyId) {
+      return data.keys().hasOnly([
+          "historyId",
+          "bookId",
+          "bookTitle",
+          "userId",
+          "userEmail",
+          "action",
+          "createdAt"
+        ])
+        && data.keys().hasAll([
+          "historyId",
+          "bookId",
+          "bookTitle",
+          "userId",
+          "userEmail",
+          "action",
+          "createdAt"
+        ])
+        && data.historyId == historyId
+        && data.bookId is string
+        && data.bookId.size() > 0
+        && data.bookTitle is string
+        && data.bookTitle.size() > 0
+        && data.bookTitle.size() <= 160
+        && data.userId is string
+        && data.userEmail is string
+        && data.userEmail.size() <= 254
+        && data.action in ["issued", "returned"]
+        && data.createdAt is number
+        && data.createdAt > 0;
+    }
+
+    function onlyInventoryCountChanged() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(["availableCopies"]);
+    }
+
+    function inventoryMovesByOne() {
+      return request.resource.data.availableCopies == resource.data.availableCopies + 1
+        || request.resource.data.availableCopies == resource.data.availableCopies - 1;
+    }
+
+    match /users/{userId} {
+      allow create: if isOwner(userId)
+        && validUser(request.resource.data, userId)
+        && request.resource.data.role == "student"
+        && request.resource.data.borrowedBooks.size() == 0;
+
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
+
+      allow update: if isOwner(userId)
+        && validUser(request.resource.data, userId)
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.role == resource.data.role;
+
+      allow delete: if false;
+    }
+
+    match /books/{bookId} {
+      allow read: if signedIn();
+
+      allow create: if signedIn()
+        && validBook(request.resource.data, bookId)
+        && request.resource.data.createdBy == request.auth.uid;
+
+      allow update: if (
+          (isAdmin() || resource.data.createdBy == request.auth.uid)
+          && validBook(request.resource.data, bookId)
+          && request.resource.data.bookId == resource.data.bookId
+          && request.resource.data.createdBy == resource.data.createdBy
+        ) || (
+          signedIn()
+          && validBook(request.resource.data, bookId)
+          && onlyInventoryCountChanged()
+          && inventoryMovesByOne()
+        );
+
+      allow delete: if signedIn() && (isAdmin() || resource.data.createdBy == request.auth.uid);
+    }
+
+    match /issueHistory/{historyId} {
+      allow create: if signedIn()
+        && validIssueHistory(request.resource.data, historyId)
+        && request.resource.data.userId == request.auth.uid;
+
+      allow read: if isAdmin() || resource.data.userId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
